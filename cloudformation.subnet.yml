@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: Availability zone in which to create the subnet
+
+  Cidr:
+    Type: String
+    Description: IP address range which instances in this subnet will be assigned
+
+  CreateNatGateway:
+    Type: String
+    Description: >
+      Only for public subnets, a NAT gateway and route table can be created.
+      A private subnet can then use the route table to route egress traffic to the NAT gateway.
+    AllowedValues:
+      - 'yes'
+      - 'no'
+
+  Name:
+    Type: String
+    Description: Name of subnet resources (e.g. private, servers, etc.)
+    AllowedPattern: ^[a-z0-9-]*$
+
+  RouteTableId:
+    Type: String
+    Description: ID of the route table which this subnet will use for routing traffic
+
+  SubnetType:
+    Type: String
+    Description: >
+      Is this a public or private subnet? Public subnets will get an EIP
+      and can have a NAT gateway generated in them.
+    AllowedValues:
+      - 'public'
+      - 'private'
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: ID of the VPC in which resources will be created
+
+
+Conditions:
+
+  IsPublicSubnet: !Equals [!Ref SubnetType, 'public']
+
+  IsCreateNatGateway: !And [!Condition IsPublicSubnet, !Equals [!Ref CreateNatGateway, 'yes']]
+
+
+Resources:
+
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: !Ref Cidr
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Ref Name
+
+  RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTableId
+      SubnetId: !Ref Subnet
+
+  EIP:
+    Type: AWS::EC2::EIP
+    Condition: IsPublicSubnet
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition:  IsCreateNatGateway
+    Properties:
+      AllocationId: !GetAtt EIP.AllocationId
+      SubnetId: !Ref Subnet
+      Tags:
+        - Key: Name
+          Value: !Ref Name
+
+  NatRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition:  IsCreateNatGateway
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub ${Name}-nat
+
+  NatDefaultRoute:
+    Type: AWS::EC2::Route
+    Condition:  IsCreateNatGateway
+    Properties:
+      RouteTableId: !Ref NatRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+
+Outputs:
+
+  SubnetId:
+    Value: !Ref Subnet
+
+  NatRouteTableId:
+    Value: !Ref NatRouteTable
+    Condition: IsCreateNatGateway

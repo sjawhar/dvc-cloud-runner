@@ -1,0 +1,11 @@
+version: "3.5"
+
+services:
+  dev:
+    build: ..
+    image: acme/cloud:dev
+    volumes:
+      - ..:/home/ec2-user/app:cached
+      - ${HOME}/.aws:/home/ec2-user/.aws
+    network_mode: host
+    command: [sleep, infinity]

@@ -1,0 +1,14 @@
+// For use with Visual Studio Code
+{
+  "name": "Docker Compose",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "dev",
+  "workspaceFolder": "/home/ec2-user/app",
+  "settings": {
+    "terminal.integrated.shell.linux": null
+  },
+  "extensions": [
+    "ms-python.python",
+    "editorconfig.editorconfig"
+  ]
+}

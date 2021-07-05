@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  Environment:
+    Type: String
+    AllowedValues:
+      - development
+      - production
+      - staging
+      - testing
+
+
+Mappings:
+
+  BatchParams:
+    production:
+      BitbucketAuthSecretName: acme/production/ml-bitbucket-auth-sB55c9
+      JobRolePath: aws-ecs-tasks-service-role
+      WandbApiKeySecretName: acme/production/ml-wandb-api-key-UGWTET
+
+
+Resources:
+
+  EcrRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: acme/sleep-staging-session
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "action": {"type": "expire"},
+                "description": "Expire old PR images",
+                "rulePriority": 1,
+                "selection": {
+                  "countNumber": 15,
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "tagPrefixList": ["dev-"],
+                  "tagStatus": "tagged"
+                }
+              },
+              {
+                "action": {"type": "expire"},
+                "description": "remove untagged images",
+                "rulePriority": 2,
+                "selection": {
+                  "countNumber": 1,
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "tagStatus": "untagged"
+                }
+              }
+            ]
+          }
+
+  BatchJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      JobDefinitionName: !Sub acme-${Environment}-ml-sleep-staging-session
+      Type: container
+      ContainerProperties:
+        Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepo}:prod
+        Vcpus: 4
+        Memory: 16000
+        ResourceRequirements:
+          - Type: GPU
+            Value: '1'
+        MountPoints:
+          - ContainerPath:
+              Fn::ImportValue:
+                !Sub acme-${Environment}-ml-batch-dir-dvc-cache
+            SourceVolume: dvc-cache
+            ReadOnly: false
+          - ContainerPath:
+              Fn::ImportValue:
+                !Sub acme-${Environment}-ml-batch-dir-scripts
+            SourceVolume: scripts
+            ReadOnly: false
+        Volumes:
+          - Name: dvc-cache
+            Host:
+              SourcePath:
+                Fn::ImportValue:
+                  !Sub acme-${Environment}-ml-batch-dir-dvc-cache
+          - Name: scripts
+            Host:
+              SourcePath:
+                Fn::ImportValue:
+                  !Sub acme-${Environment}-ml-batch-dir-scripts
+        Environment:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+        Secrets:
+          - Name: BITBUCKET_AUTH
+            ValueFrom: !Sub
+              - arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretName}
+              - SecretName: !FindInMap [BatchParams, !Ref Environment, BitbucketAuthSecretName]
+          - Name: WANDB_API_KEY
+            ValueFrom: !Sub
+              - arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretName}
+              - SecretName: !FindInMap [BatchParams, !Ref Environment, WandbApiKeySecretName]
+        JobRoleArn: !Sub
+          - arn:aws:iam::${AWS::AccountId}:role/${JobRolePath}
+          - JobRolePath: !FindInMap [BatchParams, !Ref Environment, JobRolePath]
+        ExecutionRoleArn: !Sub
+          - arn:aws:iam::${AWS::AccountId}:role/${ExecuitionRolePath}
+          - ExecuitionRolePath: !FindInMap [BatchParams, !Ref Environment, JobRolePath]
+        Command:
+          - !Sub
+            - ${ScriptsDirectory}/job-setup.sh
+            - ScriptsDirectory:
+                Fn::ImportValue:
+                  !Sub acme-${Environment}-ml-batch-dir-scripts
+          - Ref::repositoryName
+          - Ref::branchName
+      RetryStrategy:
+        Attempts: 2

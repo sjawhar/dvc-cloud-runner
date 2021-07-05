@@ -1,0 +1,11 @@
+*
+
+!src
+!test
+
+!Pipfile
+!Pipfile.lock
+
+**/__pycache__
+**/.pytest_cache
+**/*.pyc

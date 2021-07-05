@@ -1,0 +1,186 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  Environment:
+    Type: String
+    AllowedValues:
+      - development
+      - production
+      - staging
+      - testing
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+
+Mappings:
+
+  BatchParams:
+    production:
+      ComputeEnvironmentVersion: v1
+      DvcCacheDir: /dvc-cache
+      ImageId: ami-040a58356c030f09f
+      KeyPair: acme-ml
+      MaxvCpus: 256
+      ScriptsDir: /acme-scripts
+      ServiceRolePath: AWSBatchServiceRole
+
+
+Resources:
+
+  BatchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub acme-${Environment}-ml
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: '-1'
+      Tags:
+        - Key: Name
+          Value: !Sub acme-${Environment}-ml
+
+  BatchLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+        LaunchTemplateName: !Sub acme-${Environment}-ml
+        LaunchTemplateData:
+          BlockDeviceMappings:
+            - DeviceName: /dev/xvda
+              Ebs:
+                Encrypted: true
+                VolumeSize: 250
+                VolumeType: gp2
+          ImageId: !FindInMap [BatchParams, !Ref Environment, ImageId]
+          KeyName: !FindInMap [BatchParams, !Ref Environment, KeyPair]
+          SecurityGroupIds:
+            - !Ref BatchSecurityGroup
+          UserData:
+            Fn::Base64:
+              !Sub
+                - |
+                    MIME-Version: 1.0
+                    Content-Type: multipart/mixed; boundary="==BOUNDARY=="
+
+                    --==BOUNDARY==
+                    Content-Type: text/x-shellscript; charset="us-ascii"
+
+                    #!/bin/bash
+                    mkdir ${CacheDirectory}
+                    chown 1000:1000 ${CacheDirectory}
+
+                    --==BOUNDARY==
+                    Content-Type: text/x-shellscript; charset="us-ascii"
+
+                    #!/bin/bash
+                    mkdir ${ScriptsDirectory}
+                    docker run \
+                      --rm \
+                      -v "${ScriptsDirectory}:${ScriptsDirectory}" \
+                      amazon/aws-cli:2.1.1 \
+                      s3 sync \
+                        s3://acme-${Environment}-ml/job-runner-scripts \
+                        ${ScriptsDirectory}
+                    chmod +x ${ScriptsDirectory}/*.sh
+
+                    --==BOUNDARY==--\
+                - CacheDirectory: !FindInMap [BatchParams, !Ref Environment, DvcCacheDir]
+                  ScriptsDirectory: !FindInMap [BatchParams, !Ref Environment, ScriptsDir]
+
+  BatchComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      ComputeEnvironmentName: !Sub
+        - acme-${Environment}-ml-${Version}
+        - Version: !FindInMap [BatchParams, !Ref Environment, ComputeEnvironmentVersion]
+      Type: MANAGED
+      State: ENABLED
+      ServiceRole: !Sub
+        - arn:aws:iam::${AWS::AccountId}:role/service-role/${ServiceRolePath}
+        - ServiceRolePath: !FindInMap [BatchParams, !Ref Environment, ServiceRolePath]
+      ComputeResources:
+        Type: EC2
+        InstanceTypes: [p2, p3, r5]
+        MinvCpus: 0
+        MaxvCpus: !FindInMap [BatchParams, !Ref Environment, MaxvCpus]
+        DesiredvCpus: 0
+        Subnets: !Ref SubnetIds
+        InstanceRole: !Sub arn:aws:iam::${AWS::AccountId}:instance-profile/acme-${Environment}-ml-batch-instance-role
+        LaunchTemplate:
+          LaunchTemplateId: !Ref BatchLaunchTemplate
+          Version: !GetAtt BatchLaunchTemplate.LatestVersionNumber
+
+  BatchJobQueue:
+    Type: AWS::Batch::JobQueue
+    DependsOn: BatchComputeEnvironment
+    Properties:
+      JobQueueName: !Sub acme-${Environment}-ml
+      State: ENABLED
+      Priority: 1
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Select [1, !Split ['/', !Ref BatchComputeEnvironment]]
+
+  JobFailedSnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub acme-${Environment}-ml-job-failed
+
+  JobFailedSnsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref JobFailedSnsTopic]
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: sns:Publish
+            Resource: '*'
+            Principal:
+              Service: events.amazonaws.com
+
+  JobFailedSnsTopicSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: notifyme@acme.com
+      Protocol: email
+      TopicArn: !Ref JobFailedSnsTopic
+
+  JobFailedEvent:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub acme-${Environment}-ml-job-failed
+      EventPattern:
+        source: [aws.batch]
+        detail-type: [Batch Job State Change]
+        detail:
+          jobQueue: [!Ref BatchJobQueue]
+          status: [FAILED]
+      Targets:
+        - Id: !Sub acme-${Environment}-ml-job-failed-sns-target
+          Arn: !Ref JobFailedSnsTopic
+
+
+Outputs:
+
+  BatchDvcCacheDir:
+    Value: !FindInMap [BatchParams, !Ref Environment, DvcCacheDir]
+    Export:
+      Name: !Sub acme-${Environment}-ml-batch-dir-dvc-cache
+
+  BatchScriptsDir:
+    Value: !FindInMap [BatchParams, !Ref Environment, ScriptsDir]
+    Export:
+      Name: !Sub acme-${Environment}-ml-batch-dir-scripts
+
+  ComputeEnvironment:
+    Value: !Ref BatchComputeEnvironment
+
+  JobFailedSnsTopicArn:
+    Value: !Ref JobFailedSnsTopic
+
+  QueueArn:
+    Value: !Ref BatchJobQueue

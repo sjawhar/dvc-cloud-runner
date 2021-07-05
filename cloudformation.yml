@@ -1,0 +1,98 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+
+  Environment:
+    Type: String
+    AllowedValues:
+      - development
+      - production
+      - staging
+      - testing
+
+
+Resources:
+
+  Vpc:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: cloudformation.vpc.yml
+      Parameters:
+        Environment: !Ref Environment
+
+  Batch:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: cloudformation.batch.yml
+      Parameters:
+        Environment: !Ref Environment
+        SubnetIds: !GetAtt Vpc.Outputs.PublicSubnetIds
+        VpcId: !GetAtt Vpc.Outputs.VpcId
+
+  Api:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: cloudformation.api.yml
+      Parameters:
+        BatchJobQueueArn: !GetAtt Batch.Outputs.QueueArn
+        Environment: !Ref Environment
+
+  EcrRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: acme/ml-cloud
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "action": {"type": "expire"},
+                "description": "Expire old PR images",
+                "rulePriority": 1,
+                "selection": {
+                  "countNumber": 15,
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "tagPrefixList": ["dev-"],
+                  "tagStatus": "tagged"
+                }
+              },
+              {
+                "action": {"type": "expire"},
+                "description": "remove untagged images",
+                "rulePriority": 2,
+                "selection": {
+                  "countNumber": 1,
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "tagStatus": "untagged"
+                }
+              }
+            ]
+          }
+
+
+Outputs:
+
+  ApiUrl:
+    Value: !GetAtt Api.Outputs.ApiUrl
+
+  BatchComputeEnvironment:
+    Value: !GetAtt Batch.Outputs.ComputeEnvironment
+
+  BatchJobFailedSnsTopicArn:
+    Value: !GetAtt Batch.Outputs.JobFailedSnsTopicArn
+
+  BatchQueueArn:
+    Value: !GetAtt Batch.Outputs.QueueArn
+
+  PublicSubnetIds:
+    Value: !GetAtt Vpc.Outputs.PublicSubnetIds
+
+  EcrRepoName:
+    Value: !Ref EcrRepo
+
+  VpcId:
+    Value: !GetAtt Vpc.Outputs.VpcId

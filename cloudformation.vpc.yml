@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  Environment:
+    Type: String
+    AllowedValues:
+      - development
+      - production
+      - staging
+      - testing
+
+
+Mappings:
+
+  CidrBlocks:
+    production:
+      Vpc: 10.42.0.0/16
+      PublicSubnetOne: 10.42.0.0/24
+      PublicSubnetTwo: 10.42.1.0/24
+      PublicSubnetThree: 10.42.2.0/24
+
+
+Resources:
+
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !FindInMap [CidrBlocks, !Ref Environment, Vpc]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub acme-${Environment}
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub acme-${Environment}-public
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetOne:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: cloudformation.subnet.yml
+      Parameters:
+        AvailabilityZone: !Select [0, !GetAZs '']
+        Cidr: !FindInMap [CidrBlocks, !Ref Environment, PublicSubnetOne]
+        CreateNatGateway: 'no'
+        Name: !Sub acme-${Environment}-public-az1
+        RouteTableId: !Ref PublicRouteTable
+        SubnetType: public
+        VpcId: !Ref Vpc
+
+  PublicSubnetTwo:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: cloudformation.subnet.yml
+      Parameters:
+        AvailabilityZone: !Select [1, !GetAZs '']
+        Cidr: !FindInMap [CidrBlocks, !Ref Environment, PublicSubnetTwo]
+        CreateNatGateway: 'no'
+        Name: !Sub acme-${Environment}-public-az2
+        RouteTableId: !Ref PublicRouteTable
+        SubnetType: public
+        VpcId: !Ref Vpc
+
+  PublicSubnetThree:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: cloudformation.subnet.yml
+      Parameters:
+        AvailabilityZone: !Select [2, !GetAZs '']
+        Cidr: !FindInMap [CidrBlocks, !Ref Environment, PublicSubnetThree]
+        CreateNatGateway: 'no'
+        Name: !Sub acme-${Environment}-public-az3
+        RouteTableId: !Ref PublicRouteTable
+        SubnetType: public
+        VpcId: !Ref Vpc
+
+
+Outputs:
+
+  PublicSubnetIds:
+    Value: !Join
+      - ','
+      - - !GetAtt PublicSubnetOne.Outputs.SubnetId
+        - !GetAtt PublicSubnetTwo.Outputs.SubnetId
+        - !GetAtt PublicSubnetThree.Outputs.SubnetId
+
+  VpcId:
+    Value: !Ref Vpc

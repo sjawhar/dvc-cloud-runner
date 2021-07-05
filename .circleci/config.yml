@@ -1,0 +1,125 @@
+version: 2.1
+
+x-aliases:
+  - &context-aws
+      context: production-aws
+  - &param-repo-image-user
+      user:
+        type: string
+        default: ec2-user
+  - &repo-image-name ${DOCKER_REGISTRY_URL}/${DOCKER_IMAGE_NAME}
+  - &repo-image-tag ${DOCKER_IMAGE_PREFIX_DEV}${CIRCLE_SHA1}
+
+orbs:
+  aws-cli: circleci/aws-cli@1.3.1
+  aws-ecr: circleci/aws-ecr@6.12.2
+  docker: circleci/docker@1.4.0
+
+executors:
+  repo-image-builder:
+    machine:
+      image: ubuntu-1604:202007-01
+      docker_layer_caching: true
+    environment:
+      DOCKER_BUILDKIT: '1'
+
+  repo-image:
+    parameters:
+      image:
+        type: string
+        default: *repo-image-name
+      tag:
+        type: string
+        default: *repo-image-tag
+      <<: *param-repo-image-user
+    docker:
+      - image: << parameters.image >>:<< parameters.tag >>
+        aws_auth:
+          aws_access_key_id: ${AWS_ACCESS_KEY_ID}
+          aws_secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+    working_directory: /home/<< parameters.user >>/app
+
+jobs:
+  cloudformation-validate:
+    executor: aws-cli/default
+    steps:
+      - checkout
+      - aws-cli/setup:
+          aws-region: AWS_REGION
+      - run: ./cloudformation-validate.sh
+
+  docker-build:
+    parameters:
+      <<: *param-repo-image-user
+    executor: repo-image-builder
+    steps:
+      - checkout
+      - docker/dockerlint
+      - aws-ecr/build-and-push-image:
+          account-url: DOCKER_REGISTRY_URL
+          checkout: false
+          extra-build-args: --build-arg APP_USER=<< parameters.user >>
+          repo: ${DOCKER_IMAGE_NAME}
+          tag: *repo-image-tag
+
+  docker-tag-prod:
+    executor: docker/docker
+    parameters:
+      image:
+        type: string
+        default: *repo-image-name
+      tag-dev:
+        type: string
+        default: *repo-image-tag
+      tag-prod:
+        type: string
+        default: prod
+    steps:
+      - setup_remote_docker
+      - aws-ecr/ecr-login:
+          account-url: DOCKER_REGISTRY_URL
+      - docker/pull:
+          images: << parameters.image>>:<< parameters.tag-dev >>
+      - run: |
+          docker image tag \
+            << parameters.image >>:<< parameters.tag-dev >> \
+            << parameters.image >>:<< parameters.tag-prod >>
+      - aws-ecr/push-image:
+          account-url: DOCKER_REGISTRY_URL
+          repo: ${DOCKER_IMAGE_NAME}
+          tag: << parameters.tag-prod >>
+
+  python-lint:
+    executor: repo-image
+    steps:
+      - run: pipenv run lint
+
+  python-test:
+    executor: repo-image
+    steps:
+      - run: pipenv run test
+
+workflows:
+  build-and-test:
+    jobs:
+      - docker-build:
+          <<: *context-aws
+      - cloudformation-validate:
+          <<: *context-aws
+      - python-lint:
+          <<: *context-aws
+          requires:
+            - docker-build
+      - python-test:
+          <<: *context-aws
+          requires:
+            - docker-build
+      - docker-tag-prod:
+          <<: *context-aws
+          requires:
+            - docker-build
+            - python-lint
+            - python-test
+          filters:
+            branches:
+              only: master

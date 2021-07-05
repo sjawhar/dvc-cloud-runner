@@ -1,0 +1,49 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  BatchJobQueueArn:
+    Type: String
+
+  Environment:
+    Type: String
+    AllowedValues:
+      - development
+      - production
+      - staging
+      - testing
+
+Globals:
+
+  Function:
+    Runtime: python3.8
+    Handler: index.handler
+    AutoPublishAlias: live
+
+Resources:
+
+  BitbucketWebhookHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub acme-${Environment}-bitbucket-webhook
+      CodeUri: src/functions/bitbucket_webhook
+      Timeout: 5
+      Events:
+        HttpApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /bitbucket-webhook
+            Method: POST
+      Environment:
+        Variables:
+          ALLOWED_WEBHOOK_UUIDS_SECRET_ID: !Sub acme/${Environment}/bitbucket-webhook-uuids
+          JOB_DEFINITION_NAME_PREFIX: !Sub acme-${Environment}-ml
+          JOB_NAME_PREFIX: !Sub acme-${Environment}-ml-experiment
+          JOB_QUEUE_ARN: !Ref BatchJobQueueArn
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/acme-${Environment}-lambda-bitbucket-webhook
+
+Outputs:
+
+  ApiUrl:
+    Value: !Sub https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com

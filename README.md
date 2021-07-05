@@ -2,6 +2,8 @@
 
 ![Job Runner Architecture](docs/resources/job-runner.png)
 
+**DISCLAIMER**: This infrastructure was put together in late 2020, when many DVC features around experiments had not yet been introduced. As such, some parts of it are likely obsolete and can be replaced with much simpler calls to DVC itself (e.g. `dvc exp branch` and `dvc exp push`). The `utility-scripts` folder in particular can probably be thrown in the trash.
+
 ## Adding a new project
 
 1. Write a CloudFormation template with an ECR repo, Batch job definition, and any other AWS resources needed for the new project. See `cloudformation.example-project.yml` for an example.

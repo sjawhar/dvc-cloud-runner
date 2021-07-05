@@ -39,6 +39,7 @@ then
     # TODO: Replace with `dvc exp gc` once DVC 2.0 is released
     git update-ref -d "$(echo ${exp_ref_info} | awk '{print $NF}')"
 
+    # TODO: Replace with `dvc exp branch` or `dvc exp push`
     if [[ "${JOB_RESULTS_BRANCH}" == "${JOB_BASE_BRANCH}" ]]
     then
         JOB_RESULTS_BRANCH="experiment/${JOB_BASE_REV:0:7}-$(echo ${exp_ref_info} | awk -F '-' '{print $NF}')"
